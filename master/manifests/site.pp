@@ -412,6 +412,9 @@ class { 'timezone':
 ### install latest docker
 
 class {'docker':
+  # jjekir: the kernel install seems to fail when doing the local deployment into a Docker container,
+  # so let's try disabling it
+  manage_kernel => false,
 }
 
 user { 'jenkins':
