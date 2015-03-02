@@ -4,3 +4,6 @@ mod 'example42-iptables'
 mod 'garethr-docker'
 mod 'puppetlabs-ntp'
 mod 'rtyler/jenkins'
+mod 'tracywebtech-pip'
+mod 'newrelic-nrsysmond',
+  :git => "git://github.com/newrelic/puppet-nrsysmond.git"

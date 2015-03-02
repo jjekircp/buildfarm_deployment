@@ -7,6 +7,11 @@ include jenkins_files
 # setup ntp with defaults
 include '::ntp'
 
+# bring in classes listed in hiera
+if hiera('classes', false) {
+  hiera_include('classes')
+}
+
 # Needed by jenkins-slave to connect to the local master generically
 if hiera('master::ip', false) {
   host {'master':
@@ -38,20 +43,19 @@ class { 'jenkins::slave':
   slave_mode => 'exclusive',
   slave_name => 'slave_on_master',
   slave_user => 'jenkins-slave',
-  manage_slave_user => '1',
+  manage_slave_user => false,
   executors => '1',
   install_java => false,
+  require => User['jenkins-slave'],
 }
 
-exec {"jenkins-slave docker membership":
-  path    => '/usr/sbin:/usr/bin:/sbin:/bin',
-  unless => "grep -q 'docker\\S*jenkins-slave' /etc/group",
-  command => "usermod -aG docker jenkins-slave",
-  require => [User['jenkins-slave'],
-              Package['docker'],
-             ],
-  notify => Service['jenkins-slave'],
+user{'jenkins-slave':
+  ensure => present,
+  managehome => true,
+  groups => ['docker'],
+  require => Package['lxc-docker']
 }
+
 
 $slave_buildfarm_config_dir = ['/home/jenkins-slave/.buildfarm']
 file { $slave_buildfarm_config_dir:
@@ -120,16 +124,11 @@ jenkins::plugin {
 }
 
 jenkins::plugin {
-  'diskcheck': ;
+  'email-ext': ;
 }
-# config for diskcheck
-file { '/var/lib/jenkins/diskcheck.xml':
-    mode => '0640',
-    owner => jenkins,
-    group => jenkins,
-    source => 'puppet:///modules/jenkins_files/var/lib/jenkins/diskcheck.xml',
-    require => Jenkins::Plugin['diskcheck'],
-    notify => Service['jenkins'],
+
+jenkins::plugin {
+  'embeddable-build-status': ;
 }
 
 jenkins::plugin {
@@ -295,6 +294,11 @@ jenkins::plugin {
 
 ### Dependencies for Scripting
 
+# required by cleanup_docker_images.py
+package { 'python3-dateutil':
+  ensure => 'installed',
+}
+
 # required by jobs to generate Dockerfiles
 package { 'python3-empy':
   ensure => 'installed',
@@ -439,13 +443,18 @@ file { '/var/lib/jenkins/.ssh/id_rsa':
     content => hiera('jenkins::private_ssh_key'),
     require => File['/var/lib/jenkins/.ssh'],
 }
-file { '/var/lib/jenkins/.ssh/id_rsa.pub':
-    mode => '0600',
-    owner => 'jenkins',
-    group => 'jenkins',
-    content => hiera('jenkins::authorized_keys'),
-    require => File['/var/lib/jenkins/.ssh'],
+
+# Setup generic ssh_keys
+if hiera('ssh_keys', false){
+  $defaults = {
+    'ensure' => 'present',
+  }
+  create_resources(ssh_authorized_key, hiera('ssh_keys'), $defaults)
 }
+else{
+  notice("No ssh_authorized_keys defined. There should probably be at least one.")
+}
+
 
 # Reference above credientials
 file { '/var/lib/jenkins/credentials.xml':
@@ -474,4 +483,29 @@ else {
   cron {'autoreconfigure':
     ensure => absent,
   }
+}
+
+# clean up containers and dangling images https://github.com/docker/docker/issues/928#issuecomment-58619854
+cron {'docker_cleanup_images':
+  command => 'bash -c "python3 -u /home/jenkins-slave/cleanup_docker_images.py"',
+  user    => 'jenkins-slave',
+  month   => absent,
+  monthday => absent,
+  hour    => '*/2',
+  minute  => 15,
+  weekday => absent,
+  require => User['jenkins-slave'],
+}
+
+
+package { 'python3-pip':
+ ensure => 'installed',
+}
+# required by cleanup_docker script
+pip::install { 'docker-py':
+  #package => 'jenkinsapi', # defaults to $title
+  #version => '1.6', # if undef installs latest version
+  python_version => '3', # defaults to 2.7
+  #ensure => present, # defaults to present
+  require => Package['python3-pip'],
 }
